@@ -1,8 +1,8 @@
 import streamlit as st
 import pandas as pd
-import sqlite3
 import datetime
 import random
+from supabase import create_client, Client
 
 st.set_page_config(page_title="Aquatic Facilities Scheduler Enterprise", layout="wide")
 
@@ -11,7 +11,6 @@ st.set_page_config(page_title="Aquatic Facilities Scheduler Enterprise", layout=
 # ==========================================
 st.markdown("""
 <style>
-    /* Estructura base uniforme para todas las celdas del calendario (11px estrictos) */
     div.stButton > button {
         width: 100%;
         border-radius: 4px !important;
@@ -23,8 +22,6 @@ st.markdown("""
         background-color: #ffffff !important;
         border: 1px solid #dae0e5 !important;
     }
-
-    /* Forzar tamaño de texto e interlineado base */
     div.stButton > button p {
         font-size: 11px !important;
         font-family: Arial, sans-serif !important;
@@ -32,19 +29,13 @@ st.markdown("""
         line-height: 1.4 !important;
         text-align: center;
     }
-
-    /* Hover global unificado */
     div.stButton > button:hover {
         background-color: #f1f3f4 !important;
         border: 1px solid #1a73e8 !important;
     }
-    
-    /* Unificación estricta de fuentes a 11px para los textos maestros de la fila */
     .role-text { color: #1a73e8; font-weight: bold; font-size: 11px !important; font-family: Arial, sans-serif; display: inline-block; margin-top: 6px; }
     .name-text { font-weight: bold; font-size: 11px !important; font-family: Arial, sans-serif; display: inline-block; margin-top: 6px; }
     .header-text { font-weight: bold; font-size: 11px !important; font-family: Arial, sans-serif; }
-    
-    /* Otros componentes del layout */
     .matrix-title { background-color: #202124; color: white; font-size: 12px; font-weight: bold; padding: 8px; text-align: left; margin-top: 20px; }
     .shift-group-header { background-color: #e8f0fe; font-weight: bold; font-size: 11px; color: #1a73e8; text-align: left; padding: 6px 8px; border: 1px solid #dae0e5; }
     .role-row-header { background-color: #ffffff; font-weight: bold; font-size: 11px; text-align: left; padding: 6px 6px 6px 20px; color: #495057; border: 1px solid #dae0e5; }
@@ -53,49 +44,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# MULTI-TABLE DATABASE INITIALIZATION
+# SUPABASE CONNECTION SETUP
 # ==========================================
-def init_db():
-    conn = sqlite3.connect('horarios_historicos.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS asignaciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            semana TEXT,
-            empleado TEXT,
-            rol TEXT,
-            dia TEXT,
-            rotation TEXT,
-            hours TEXT,
-            location TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS directorio_personal (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            employee_number TEXT UNIQUE,
-            name TEXT,
-            lastname TEXT,
-            role TEXT,
-            phone TEXT,
-            email TEXT,
-            UNIQUE(name, lastname)
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# Las credenciales se leen de forma segura desde st.secrets al publicar en la nube
+try:
+    SUPABASE_URL = st.secrets["SUPABASE_URL"]
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
+except:
+    # Soporte local para desarrollo inicial en tu Mac
+    SUPABASE_URL = "TU_SUPABASE_URL_AQUI"
+    SUPABASE_KEY = "TU_SUPABASE_ANON_KEY_AQUI"
 
-init_db()
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # ==========================================
-# BACKEND DB PERSISTENCE FUNCTIONS
+# BACKEND SUPABASE PERSISTENCE FUNCTIONS
 # ==========================================
-def cargar_personal_desde_db():
-    conn = sqlite3.connect('horarios_historicos.db')
-    df = pd.read_sql_query("SELECT employee_number, name, lastname, role, phone, email FROM directorio_personal", conn)
-    conn.close()
-    
-    if df.empty:
+def cargar_personal_desde_supabase():
+    try:
+        response = supabase.table("directorio_personal").select("employee_number, name, lastname, role, phone, email").execute()
+        records = response.data
+    except Exception as e:
+        st.error(f"Error cargando personal: {e}")
+        return []
+
+    if not records:
         personal_semilla = [
             {"employee_number": "10243", "name": "Barry", "lastname": "Tucker", "role": "Pool Supervisor", "phone": "305-555-0192", "email": "btucker@miamigov.com"},
             {"employee_number": "10244", "name": "Romina", "lastname": "Berdun", "role": "Aquatic Specialist", "phone": "305-555-0143", "email": "rberdun@miamigov.com"},
@@ -110,26 +83,17 @@ def cargar_personal_desde_db():
             {"employee_number": "11223", "name": "Ashley", "lastname": "Valle", "role": "LG1", "phone": "305-555-0211", "email": "avalle@miamigov.com"},
             {"employee_number": "99112", "name": "Adrianna", "lastname": "Crivelli", "role": "Collection Clerk", "phone": "305-555-0222", "email": "acrivelli@miamigov.com"},
         ]
-        conn = sqlite3.connect('horarios_historicos.db')
-        cursor = conn.cursor()
         for p in personal_semilla:
-            cursor.execute("INSERT OR IGNORE INTO directorio_personal (employee_number, name, lastname, role, phone, email) VALUES (?,?,?,?,?,?)",
-                           (p["employee_number"], p["name"], p["lastname"], p["role"], p["phone"], p["email"]))
-        conn.commit()
-        conn.close()
+            supabase.table("directorio_personal").insert(p).execute()
         return personal_semilla
-    return df.to_dict(orient='records')
+    return records
 
-def guardar_guardia_en_db_segundo_plano(g):
+def guardar_guardia_en_supabase(g):
     try:
-        conn = sqlite3.connect('horarios_historicos.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO directorio_personal (employee_number, name, lastname, role, phone, email) VALUES (?,?,?,?,?,?)",
-                       (g["employee_number"], g["name"], g["lastname"], g["role"], g["phone"], g["email"]))
-        conn.commit()
-        conn.close()
+        supabase.table("directorio_personal").insert(g).execute()
         return True
-    except: return False
+    except:
+        return False
 
 def callback_guardar_nuevo_guardia():
     val_name = st.session_state.get("input_new_name", "").strip()
@@ -144,10 +108,10 @@ def callback_guardar_nuevo_guardia():
             st.session_state["mensaje_error_crud"] = f"❌ Error: El empleado '{full_key}' ya existe."
             return
         val_num = st.session_state.get("input_new_num", "").strip() or f"TEMP-{random.randint(10000, 99999)}"
-        nuevo_guard = {"employee_number": val_num, "name": val_name, "lastname": val_last, "role": val_role, "phone": st.session_state.get("input_new_phone", "").strip(), "email": st.session_state.get("input_new_email", "").strip()}
+        nuevo_guard = {"employee_number": val_num, "name": val_name, "lastname": val_last, "role": val_role, "phone": "", "email": ""}
         st.session_state.empleados.append(nuevo_guard)
         st.session_state.matriz_horario[full_key] = {d: {"rotation": "OFF", "hours": "", "location": "Shenandoah"} for d in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]}
-        guardar_guardia_en_db_segundo_plano(nuevo_guard)
+        guardar_guardia_en_supabase(nuevo_guard)
         st.session_state["input_new_name"] = ""
         st.session_state["input_new_last"] = ""
         st.session_state["input_new_num"] = ""
@@ -155,18 +119,13 @@ def callback_guardar_nuevo_guardia():
 # ==========================================
 # STATE INITIALIZATION (MEMORY FIRST)
 # ==========================================
-if 'empleados' not in st.session_state: st.session_state.empleados = cargar_personal_desde_db()
+if 'empleados' not in st.session_state: st.session_state.empleados = cargar_personal_desde_supabase()
 if 'matriz_horario' not in st.session_state: st.session_state.matriz_horario = {}
 
 days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
 rotations = ["AM Rotation", "PM Rotation", "Noon Rotation", "All Day", "APP LWOP"]
 locations = ["Grapeland", "Miller", "Shenandoah", "Gibson", "Range", "Jose Marti", "Curtis", "Manolo Reyes", "Virrick", "Williams"]
 horas_validadas = ["05:00 AM", "05:30 AM", "06:00 AM", "06:30 AM", "07:00 AM", "07:30 AM", "08:00 AM", "08:30 AM", "09:00 AM", "09:30 AM", "10:00 AM", "10:30 AM", "11:00 AM", "11:30 AM", "12:00 PM", "12:30 PM", "01:00 PM", "01:30 PM", "02:00 PM", "02:30 PM", "03:00 PM", "03:30 PM", "04:00 PM", "04:30 PM", "05:00 PM", "05:30 PM", "06:00 PM", "06:30 PM", "07:00 PM", "07:30 PM", "08:00 PM", "08:30 PM", "09:00 PM", "09:30 PM", "10:00 PM"]
-
-for emp in st.session_state.empleados:
-    full_id = f"{emp['name']} {emp['lastname']}"
-    if full_id not in st.session_state.matriz_horario:
-        st.session_state.matriz_horario[full_id] = {day: {"rotation": "OFF", "hours": "", "location": "Shenandoah"} for day in days}
 
 if "edit_target_emp" not in st.session_state: st.session_state.edit_target_emp = None
 if "edit_target_day" not in st.session_state: st.session_state.edit_target_day = "Sunday"
@@ -179,26 +138,24 @@ st.sidebar.header("📋 Administration Panel")
 
 lista_semanas_2026 = [f"Week {i}" for i in range(1, 53)]
 
-# CALLBACK AL CAMBIAR LA SEMANA: Carga de forma automatizada los históricos desde la DB
 def callback_cambio_semana_activa():
     semana_sel = st.session_state.selector_semana_global
-    conn = sqlite3.connect('horarios_historicos.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT empleado, dia, rotation, hours, location FROM asignaciones WHERE semana = ?", (semana_sel,))
-    rows = cursor.fetchall()
-    conn.close()
-    
-    # Resetear matriz base en memoria viva para la nueva semana
+    try:
+        response = supabase.table("asignaciones").select("empleado, dia, rotation, hours, location").eq("semana", semana_sel).execute()
+        rows = response.data
+    except Exception as e:
+        rows = []
+
     st.session_state.matriz_horario = {}
     for emp in st.session_state.empleados:
         f_id = f"{emp['name']} {emp['lastname']}"
         st.session_state.matriz_horario[f_id] = {day: {"rotation": "OFF", "hours": "", "location": "Shenandoah"} for day in days}
         
-    # Inyectar los históricos recuperados de la DB en la matriz viva
     for r in rows:
-        emp_name, d_name, rot, hrs, loc = r
+        emp_name = r["empleado"]
+        d_name = r["dia"]
         if emp_name in st.session_state.matriz_horario:
-            st.session_state.matriz_horario[emp_name][d_name] = {"rotation": rot, "hours": hrs, "location": loc}
+            st.session_state.matriz_horario[emp_name][d_name] = {"rotation": r["rotation"], "hours": r["hours"], "location": r["location"]}
 
 semana_activa = st.sidebar.selectbox("Active Schedule Week", lista_semanas_2026, index=25, key="selector_semana_global", on_change=callback_cambio_semana_activa)
 
@@ -207,55 +164,31 @@ if not st.session_state.matriz_horario:
 
 # 1. Personnel CRUD Management
 with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
-    crud_mode = st.radio("Action", ["Add New", "Edit Existing", "Delete"], horizontal=True)
+    crud_mode = st.radio("Action", ["Add New"], horizontal=True)
     if crud_mode == "Add New":
         st.text_input("First Name *", key="input_new_name")
         st.text_input("Last Name *", key="input_new_last")
         st.selectbox("Official Role *", ["Pool Supervisor", "Aquatic Specialist", "Lifeguard II", "Seasonal Lifeguard II", "WSI", "LG1", "Collection Clerk"], key="input_new_role")
         st.button("💾 Save New Guard", on_click=callback_guardar_nuevo_guardia)
 
-# MODULO 2: Database History Menu (CORREGIDO Y VISIBLE SIEMPRE)
+# 2. Database History Menu (Guardado síncrono en Supabase)
 with st.sidebar.expander("🗄️ 2. Database History Menu", expanded=False):
-    if st.button("💾 Save Week to DB"):
-        conn = sqlite3.connect('horarios_historicos.db')
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM asignaciones WHERE semana = ?", (semana_activa,))
+    if st.button("💾 Save Week to Supabase"):
+        supabase.table("asignaciones").delete().eq("semana", semana_activa).execute()
+        bulk_inserts = []
         for emp in st.session_state.empleados:
             f_id = f"{emp['name']} {emp['lastname']}"
             for day in days:
                 c = st.session_state.matriz_horario[f_id][day]
-                cursor.execute("INSERT INTO asignaciones (semana, empleado, rol, dia, rotation, hours, location) VALUES (?,?,?,?,?,?,?)", (semana_activa, f_id, emp["role"], day, c["rotation"], c["hours"], c["location"]))
-        conn.commit()
-        conn.close()
-        st.success("Archived successfully!")
+                bulk_inserts.append({
+                    "semana": semana_activa, "empleado": f_id, "rol": emp["role"],
+                    "dia": day, "rotation": c["rotation"], "hours": c["hours"], "location": c["location"]
+                })
+        if bulk_inserts:
+            supabase.table("asignaciones").insert(bulk_inserts).execute()
+        st.success("Archived successfully in Cloud database!")
 
-    st.write("---")
-    # Forzamos a que si la tabla está vacía, muestre una alerta de estado en vez de desaparecer
-    try:
-        conn = sqlite3.connect('horarios_historicos.db')
-        df_semanas = pd.read_sql_query("SELECT DISTINCT semana FROM asignaciones", conn)
-        conn.close()
-        
-        if not df_semanas.empty:
-            semana_consultar = st.selectbox("Select Week to Load", df_semanas["semana"].tolist(), key="historial_dropdown_weeks")
-            if st.button("📂 Load Selected Week"):
-                conn = sqlite3.connect('horarios_historicos.db')
-                cursor = conn.cursor()
-                cursor.execute("SELECT empleado, dia, rotation, hours, location FROM asignaciones WHERE semana = ?", (semana_consultar,))
-                rows = cursor.fetchall()
-                conn.close()
-                for r in rows:
-                    emp_name, d_name, rot, hrs, loc = r
-                    if emp_name in st.session_state.matriz_horario:
-                        st.session_state.matriz_horario[emp_name][d_name] = {"rotation": rot, "hours": hrs, "location": loc}
-                st.success("Loaded!")
-                st.rerun()
-        else:
-            st.info("No saved weeks found in the history database yet.")
-    except Exception as e:
-        st.error(f"Database sync hint: {e}")
-
-# 3. Individual Shift Management (Retráctil e inteligente)
+# 3. Individual Shift Management
 if st.session_state.show_editor and st.session_state.edit_target_emp:
     with st.sidebar.expander("⏳ 3. Assign / Edit Individual Shift", expanded=True):
         current_staff_keys = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
@@ -309,10 +242,10 @@ def calcular_delta_horas_exactas(rotacion_label, string_rango):
     if rotacion_label in ["OFF", "APP LWOP"] or not string_rango or "-" not in string_rango: return 0.0
     try:
         parts = string_rango.split("-")
-        min_inicio = datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").minute
-        min_fin = datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").minute
-        horas_brutas = (min_fin - min_inicio) / 60.0 if min_fin > min_inicio else ((1440 - min_inicio) + min_fin) / 60.0
-        return horas_brutas - 1.0 if horas_brutas > 6.0 else horas_brutas
+        m_in = datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").minute
+        m_out = datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").minute
+        brutas = (m_out - m_in) / 60.0 if m_out > m_in else ((1440 - m_in) + m_out) / 60.0
+        return brutas - 1.0 if brutas > 6.0 else brutas
     except: return 0.0
 
 def calcular_cobertura_real_por_horas(target_day):
@@ -325,8 +258,7 @@ def calcular_cobertura_real_por_horas(target_day):
     }
     for emp in st.session_state.empleados:
         f_id = f"{emp['name']} {emp['lastname']}"
-        role_raw = emp["role"]
-        rol_key = "LG1" if role_raw == "LG1" else "WSI" if role_raw == "WSI" else "Lifeguard II" if role_raw in ["Lifeguard II", "Seasonal Lifeguard II"] else None
+        rol_key = "LG1" if emp["role"] == "LG1" else "WSI" if emp["role"] == "WSI" else "Lifeguard II" if emp["role"] in ["Lifeguard II", "Seasonal Lifeguard II"] else None
         if rol_key and f_id in st.session_state.matriz_horario:
             cell = st.session_state.matriz_horario[f_id][target_day]
             if cell["rotation"] not in ["OFF", "APP LWOP"] and "-" in cell["hours"]:
@@ -346,7 +278,6 @@ st.markdown(f"### 📅 Master Staff Schedule — {semana_activa}")
 prioridad_roles = {"Pool Supervisor": 1, "Aquatic Specialist": 2, "Lifeguard II": 3, "Seasonal Lifeguard II": 4, "WSI": 5, "LG1": 6, "Collection Clerk": 7}
 empleados_ordenados = sorted(st.session_state.empleados, key=lambda x: prioridad_roles.get(x["role"], 99))
 
-# Distribución de columnas fija (Ubicación: Línea 199 del archivo para ajustar el ancho)
 row_cols_layout = [1.8, 1.5, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.0]
 cols_header = st.columns(row_cols_layout)
 cols_header[0].markdown("<span class='header-text'>Role Hierarchy</span>", unsafe_allow_html=True)
@@ -362,7 +293,6 @@ for idx_emp, emp in enumerate(empleados_ordenados):
     f_id = f"{emp['name']} {emp['lastname']}"
     if f_id in st.session_state.matriz_horario:
         row_cols = st.columns(row_cols_layout)
-        
         row_cols[0].markdown(f"<span class='role-text'>{emp['role']}</span>", unsafe_allow_html=True)
         row_cols[1].markdown(f"<span class='name-text'>{f_id}</span>", unsafe_allow_html=True)
         
