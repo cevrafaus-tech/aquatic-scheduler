@@ -52,8 +52,8 @@ try:
     SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
 except:
     # Soporte local para desarrollo inicial en tu Mac
-    SUPABASE_URL = "TU_SUPABASE_URL_AQUI"
-    SUPABASE_KEY = "TU_SUPABASE_ANON_KEY_AQUI"
+    SUPABASE_URL = "https://cqnnxggjxkhvgdxtombh.supabase.co/rest/v1/"
+    SUPABASE_KEY = "sb_publishable_52Sds833_nWejjeDAYDEkQ_ZpDB-Tsr"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
