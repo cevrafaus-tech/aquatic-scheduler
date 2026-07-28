@@ -7,55 +7,84 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Aquatic Facilities Scheduler Enterprise", layout="wide")
 
 # ==========================================
-# ADVANCED INTERFACE STYLING (CSS)
+# ADVANCED INTERFACE STYLING (IMPROVED UI & CONTRAST)
 # ==========================================
 st.markdown("""
 <style>
+    /* Botones de celdas: Tipografía optimizada a 12px con alto contraste */
     div.stButton > button {
         width: 100%;
-        border-radius: 4px !important;
+        border-radius: 6px !important;
         padding: 6px 4px !important;
         height: auto !important;
-        line-height: 1.4 !important;
+        line-height: 1.45 !important;
         text-align: center !important;
         white-space: pre-line !important;
         background-color: #ffffff !important;
-        border: 1px solid #dae0e5 !important;
+        border: 1px solid #d1d5db !important;
+        box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
     }
+
+    /* Estilo del texto interior del botón */
     div.stButton > button p {
-        font-size: 11px !important;
-        font-family: Arial, sans-serif !important;
+        font-size: 12px !important;
+        font-weight: 600 !important;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
         margin: 0 !important;
         line-height: 1.4 !important;
-        text-align: center;
+        text-align: center !important;
     }
+
     div.stButton > button:hover {
-        background-color: #f1f3f4 !important;
-        border: 1px solid #1a73e8 !important;
+        background-color: #f3f4f6 !important;
+        border-color: #1a73e8 !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
     }
-    .role-text { color: #1a73e8; font-weight: bold; font-size: 11px !important; font-family: Arial, sans-serif; display: inline-block; margin-top: 6px; }
-    .name-text { font-weight: bold; font-size: 11px !important; font-family: Arial, sans-serif; display: inline-block; margin-top: 6px; }
-    .header-text { font-weight: bold; font-size: 11px !important; font-family: Arial, sans-serif; }
-    .matrix-title { background-color: #202124; color: white; font-size: 12px; font-weight: bold; padding: 8px; text-align: left; margin-top: 20px; }
-    .shift-group-header { background-color: #e8f0fe; font-weight: bold; font-size: 11px; color: #1a73e8; text-align: left; padding: 6px 8px; border: 1px solid #dae0e5; }
-    .role-row-header { background-color: #ffffff; font-weight: bold; font-size: 11px; text-align: left; padding: 6px 6px 6px 20px; color: #495057; border: 1px solid #dae0e5; }
-    .pos-cell { font-weight: bold; font-size: 11px; text-align: center; padding: 6px 4px; border: 1px solid #dae0e5; }
+    
+    /* Tipografía mejorada para etiquetas y encabezados de la grilla */
+    .role-text { color: #1a73e8; font-weight: 700; font-size: 12px !important; font-family: sans-serif; display: inline-block; margin-top: 6px; }
+    .name-text { color: #1f2937; font-weight: 700; font-size: 12px !important; font-family: sans-serif; display: inline-block; margin-top: 6px; }
+    .header-text { color: #111827; font-weight: 700; font-size: 12px !important; font-family: sans-serif; text-align: center; display: block; }
+    .header-text-left { color: #111827; font-weight: 700; font-size: 12px !important; font-family: sans-serif; text-align: left; display: block; }
+    
+    /* Titulares y bloques de alarmas posicionales */
+    .matrix-title { background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 700; padding: 10px; text-align: left; margin-top: 24px; border-radius: 4px; }
+    .shift-group-header { background-color: #e0f2fe; font-weight: 700; font-size: 12px; color: #0369a1; text-align: left; padding: 6px 10px; border: 1px solid #bae6fd; }
+    .role-row-header { background-color: #ffffff; font-weight: 600; font-size: 12px; text-align: left; padding: 6px 6px 6px 20px; color: #374151; border: 1px solid #e5e7eb; }
+    .pos-cell { font-weight: 700; font-size: 11px; text-align: center; padding: 6px 4px; border: 1px solid #e5e7eb; border-radius: 3px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# SUPABASE CONNECTION SETUP
+# SUPABASE CONNECTION SETUP (PARCHED & SECURE)
 # ==========================================
-# Las credenciales se leen de forma segura desde st.secrets al publicar en la nube
 try:
-    SUPABASE_URL = st.secrets["SUPABASE_URL"]
-    SUPABASE_KEY = st.secrets["SUPABASE_KEY"]
-except:
-    # Soporte local para desarrollo inicial en tu Mac
-    SUPABASE_URL = "https://cqnnxggjxkhvgdxtombh.supabase.co/rest/v1/"
-    SUPABASE_KEY = "sb_publishable_52Sds833_nWejjeDAYDEkQ_ZpDB-Tsr"
+    raw_url = st.secrets["SUPABASE_URL"].strip()
+    if "/rest/v1" in raw_url:
+        raw_url = raw_url.split("/rest/v1")[0]
+    
+    SUPABASE_URL = raw_url.rstrip("/")
+    SUPABASE_KEY = st.secrets["SUPABASE_KEY"].strip()
+    supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+    st.error("### 🔌 Error de Configuración de Supabase")
+    st.info("Verifica que las variables SUPABASE_URL y SUPABASE_KEY estén bien escritas en Secrets.")
+    st.stop()
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+# ==========================================
+# HELPER: CÁLCULO DE FECHAS DE SEMANAS (2026)
+# ==========================================
+def obtener_rango_fechas_semana(num_semana, ao=2026):
+    primera_fecha = datetime.date(ao, 1, 1)
+    dias_hasta_domingo = (6 - primera_fecha.weekday()) % 7
+    primer_domingo = primera_fecha + datetime.timedelta(days=dias_hasta_domingo)
+    
+    inicio_semana = primer_domingo + datetime.timedelta(weeks=num_semana - 1)
+    fin_semana = inicio_semana + datetime.timedelta(days=6)
+    
+    return f"Week {num_semana} ({inicio_semana.strftime('%b %d')} - {fin_semana.strftime('%b %d')})"
+
+lista_semanas_2026 = [obtener_rango_fechas_semana(i) for i in range(1, 53)]
 
 # ==========================================
 # BACKEND SUPABASE PERSISTENCE FUNCTIONS
@@ -63,12 +92,12 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 def cargar_personal_desde_supabase():
     try:
         response = supabase.table("directorio_personal").select("employee_number, name, lastname, role, phone, email").execute()
-        records = response.data
+        df = pd.DataFrame(response.data)
     except Exception as e:
-        st.error(f"Error cargando personal: {e}")
+        st.error(f"Error cargando directorio de personal: {e}")
         return []
-
-    if not records:
+    
+    if df.empty:
         personal_semilla = [
             {"employee_number": "10243", "name": "Barry", "lastname": "Tucker", "role": "Pool Supervisor", "phone": "305-555-0192", "email": "btucker@miamigov.com"},
             {"employee_number": "10244", "name": "Romina", "lastname": "Berdun", "role": "Aquatic Specialist", "phone": "305-555-0143", "email": "rberdun@miamigov.com"},
@@ -83,17 +112,18 @@ def cargar_personal_desde_supabase():
             {"employee_number": "11223", "name": "Ashley", "lastname": "Valle", "role": "LG1", "phone": "305-555-0211", "email": "avalle@miamigov.com"},
             {"employee_number": "99112", "name": "Adrianna", "lastname": "Crivelli", "role": "Collection Clerk", "phone": "305-555-0222", "email": "acrivelli@miamigov.com"},
         ]
-        for p in personal_semilla:
-            supabase.table("directorio_personal").insert(p).execute()
+        try:
+            for p in personal_semilla:
+                supabase.table("directorio_personal").insert(p).execute()
+        except: pass
         return personal_semilla
-    return records
+    return df.to_dict(orient='records')
 
 def guardar_guardia_en_supabase(g):
     try:
         supabase.table("directorio_personal").insert(g).execute()
         return True
-    except:
-        return False
+    except: return False
 
 def callback_guardar_nuevo_guardia():
     val_name = st.session_state.get("input_new_name", "").strip()
@@ -117,7 +147,7 @@ def callback_guardar_nuevo_guardia():
         st.session_state["input_new_num"] = ""
 
 # ==========================================
-# STATE INITIALIZATION (MEMORY FIRST)
+# STATE INITIALIZATION
 # ==========================================
 if 'empleados' not in st.session_state: st.session_state.empleados = cargar_personal_desde_supabase()
 if 'matriz_horario' not in st.session_state: st.session_state.matriz_horario = {}
@@ -136,16 +166,15 @@ if "show_editor" not in st.session_state: st.session_state.show_editor = False
 # ==========================================
 st.sidebar.header("📋 Administration Panel")
 
-lista_semanas_2026 = [f"Week {i}" for i in range(1, 53)]
-
+# CALLBACK AL CAMBIAR LA SEMANA: Carga automatizada desde Supabase
 def callback_cambio_semana_activa():
     semana_sel = st.session_state.selector_semana_global
     try:
         response = supabase.table("asignaciones").select("empleado, dia, rotation, hours, location").eq("semana", semana_sel).execute()
         rows = response.data
-    except Exception as e:
+    except Exception:
         rows = []
-
+    
     st.session_state.matriz_horario = {}
     for emp in st.session_state.empleados:
         f_id = f"{emp['name']} {emp['lastname']}"
@@ -171,24 +200,48 @@ with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
         st.selectbox("Official Role *", ["Pool Supervisor", "Aquatic Specialist", "Lifeguard II", "Seasonal Lifeguard II", "WSI", "LG1", "Collection Clerk"], key="input_new_role")
         st.button("💾 Save New Guard", on_click=callback_guardar_nuevo_guardia)
 
-# 2. Database History Menu (Guardado síncrono en Supabase)
+# 2. Database History Menu (Guardado y Retorno de Semanas)
 with st.sidebar.expander("🗄️ 2. Database History Menu", expanded=False):
-    if st.button("💾 Save Week to Supabase"):
-        supabase.table("asignaciones").delete().eq("semana", semana_activa).execute()
-        bulk_inserts = []
-        for emp in st.session_state.empleados:
-            f_id = f"{emp['name']} {emp['lastname']}"
-            for day in days:
-                c = st.session_state.matriz_horario[f_id][day]
-                bulk_inserts.append({
-                    "semana": semana_activa, "empleado": f_id, "rol": emp["role"],
-                    "dia": day, "rotation": c["rotation"], "hours": c["hours"], "location": c["location"]
-                })
-        if bulk_inserts:
-            supabase.table("asignaciones").insert(bulk_inserts).execute()
-        st.success("Archived successfully in Cloud database!")
+    if st.button("💾 Save Active Week to Supabase"):
+        try:
+            supabase.table("asignaciones").delete().eq("semana", semana_activa).execute()
+            bulk_inserts = []
+            for emp in st.session_state.empleados:
+                f_id = f"{emp['name']} {emp['lastname']}"
+                for day in days:
+                    c = st.session_state.matriz_horario[f_id][day]
+                    bulk_inserts.append({
+                        "semana": semana_activa, "empleado": f_id, "rol": emp["role"],
+                        "dia": day, "rotation": c["rotation"], "hours": c["hours"], "location": c["location"]
+                    })
+            if bulk_inserts:
+                supabase.table("asignaciones").insert(bulk_inserts).execute()
+            st.success("Archived in Supabase cloud!")
+        except Exception as e:
+            st.error(f"Cloud Save Error: {e}")
 
-# 3. Individual Shift Management
+    st.write("---")
+    try:
+        response_dist = supabase.table("asignaciones").select("semana").execute()
+        df_semanas = pd.DataFrame(response_dist.data)
+        
+        if not df_semanas.empty:
+            lista_semanas_db = df_semanas["semana"].unique().tolist()
+            semana_consultar = st.selectbox("Select Saved Week to Load", lista_semanas_db, key="historial_dropdown_weeks")
+            if st.button("📂 Return / Load Selected Week"):
+                response_week = supabase.table("asignaciones").select("empleado, dia, rotation, hours, location").eq("semana", semana_consultar).execute()
+                for r in response_week.data:
+                    emp_name = r["empleado"]
+                    d_name = r["dia"]
+                    if emp_name in st.session_state.matriz_horario:
+                        st.session_state.matriz_horario[emp_name][d_name] = {"rotation": r["rotation"], "hours": r["hours"], "location": r["location"]}
+                st.success("Week loaded successfully!")
+                st.rerun()
+        else:
+            st.info("No saved weeks found in cloud database yet.")
+    except Exception: pass
+
+# 3. Individual Shift Management (MEJORA 2: OFF Desmarcado por defecto)
 if st.session_state.show_editor and st.session_state.edit_target_emp:
     with st.sidebar.expander("⏳ 3. Assign / Edit Individual Shift", expanded=True):
         current_staff_keys = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
@@ -203,13 +256,17 @@ if st.session_state.show_editor and st.session_state.edit_target_emp:
         with col_start: start_time = st.selectbox("Start Time", horas_validadas, index=12)
         with col_end: end_time = st.selectbox("End Time", horas_validadas, index=29)
         selected_loc = st.selectbox("Individual Location", locations, index=locations.index(current_data['location']) if current_data['location'] in locations else 2)
-        mark_off = st.checkbox("Mark Employee as OFF Duty / LWOP", value=(current_data['rotation'] == "OFF"))
+        
+        # MEJORA: value=False para que NO aparezca marcado por defecto
+        mark_off = st.checkbox("Mark Employee as OFF Duty / LWOP", value=False)
 
         col_save, col_close = st.columns(2)
         with col_save:
             if st.button("📌 Apply Shift"):
-                if mark_off: st.session_state.matriz_horario[selected_emp][selected_day] = {"rotation": "OFF", "hours": "", "location": selected_loc}
-                else: st.session_state.matriz_horario[selected_emp][selected_day] = {"rotation": selected_rot, "hours": f"{start_time} - {end_time}", "location": selected_loc}
+                if mark_off: 
+                    st.session_state.matriz_horario[selected_emp][selected_day] = {"rotation": "OFF", "hours": "", "location": selected_loc}
+                else: 
+                    st.session_state.matriz_horario[selected_emp][selected_day] = {"rotation": selected_rot, "hours": f"{start_time} - {end_time}", "location": selected_loc}
                 st.success("Updated!")
                 st.rerun()
         with col_close:
@@ -242,11 +299,11 @@ def calcular_delta_horas_exactas(rotacion_label, string_rango):
     if rotacion_label in ["OFF", "APP LWOP"] or not string_rango or "-" not in string_rango: return 0.0
     try:
         parts = string_rango.split("-")
-        m_in = datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").minute
-        m_out = datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").minute
-        brutas = (m_out - m_in) / 60.0 if m_out > m_in else ((1440 - m_in) + m_out) / 60.0
-        return brutas - 1.0 if brutas > 6.0 else brutas
-    except: return 0.0
+        min_inicio = datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[0].strip(), "%I:%M %p").minute
+        min_fin = datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").hour * 60 + datetime.datetime.strptime(parts[1].strip(), "%I:%M %p").minute
+        horas_brutas = (min_fin - min_inicio) / 60.0 if min_fin > min_inicio else ((1440 - min_inicio) + min_fin) / 60.0
+        return horas_brutas - 1.0 if horas_brutas > 6.0 else horas_brutas
+    except Exception: return 0.0
 
 def calcular_cobertura_real_por_horas(target_day):
     es_wknd = target_day in ["Sunday", "Saturday"]
@@ -258,7 +315,8 @@ def calcular_cobertura_real_por_horas(target_day):
     }
     for emp in st.session_state.empleados:
         f_id = f"{emp['name']} {emp['lastname']}"
-        rol_key = "LG1" if emp["role"] == "LG1" else "WSI" if emp["role"] == "WSI" else "Lifeguard II" if emp["role"] in ["Lifeguard II", "Seasonal Lifeguard II"] else None
+        role_raw = emp["role"]
+        rol_key = "LG1" if role_raw == "LG1" else "WSI" if role_raw == "WSI" else "Lifeguard II" if role_raw in ["Lifeguard II", "Seasonal Lifeguard II"] else None
         if rol_key and f_id in st.session_state.matriz_horario:
             cell = st.session_state.matriz_horario[f_id][target_day]
             if cell["rotation"] not in ["OFF", "APP LWOP"] and "-" in cell["hours"]:
@@ -271,7 +329,7 @@ def calcular_cobertura_real_por_horas(target_day):
 cobertura_horaria_semanal = {day: calcular_cobertura_real_por_horas(day) for day in days}
 
 # ==========================================
-# INTERACTIVE MASTER GRID DESIGN
+# INTERACTIVE MASTER GRID DESIGN (MEJORA: ALINEACIÓN Y TIPOGRAFÍA)
 # ==========================================
 st.markdown(f"### 📅 Master Staff Schedule — {semana_activa}")
 
@@ -280,11 +338,16 @@ empleados_ordenados = sorted(st.session_state.empleados, key=lambda x: prioridad
 
 row_cols_layout = [1.8, 1.5, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.0]
 cols_header = st.columns(row_cols_layout)
-cols_header[0].markdown("<span class='header-text'>Role Hierarchy</span>", unsafe_allow_html=True)
-cols_header[1].markdown("<span class='header-text'>Full Name</span>", unsafe_allow_html=True)
-for i, day in enumerate(days): cols_header[i+2].markdown(f"<span class='header-text'>{day[:3]}</span>", unsafe_allow_html=True)
+
+cols_header[0].markdown("<span class='header-text-left'>Role Hierarchy</span>", unsafe_allow_html=True)
+cols_header[1].markdown("<span class='header-text-left'>Full Name</span>", unsafe_allow_html=True)
+
+# MEJORA: Días centrados explícitamente en el encabezado
+for i, day in enumerate(days): 
+    cols_header[i+2].markdown(f"<span class='header-text'>{day[:3]}</span>", unsafe_allow_html=True)
+
 cols_header[9].markdown("<span class='header-text'>Total</span>", unsafe_allow_html=True)
-st.markdown("<hr style='margin: 4px 0 12px 0; border-color:#dae0e5;'>", unsafe_allow_html=True)
+st.markdown("<hr style='margin: 6px 0 14px 0; border-color:#e5e7eb;'>", unsafe_allow_html=True)
 
 totales_por_dia = {day: 0 for day in days}
 gran_total_horas = 0.0
@@ -293,6 +356,7 @@ for idx_emp, emp in enumerate(empleados_ordenados):
     f_id = f"{emp['name']} {emp['lastname']}"
     if f_id in st.session_state.matriz_horario:
         row_cols = st.columns(row_cols_layout)
+        
         row_cols[0].markdown(f"<span class='role-text'>{emp['role']}</span>", unsafe_allow_html=True)
         row_cols[1].markdown(f"<span class='name-text'>{f_id}</span>", unsafe_allow_html=True)
         
@@ -321,13 +385,18 @@ for idx_emp, emp in enumerate(empleados_ordenados):
                 st.session_state.show_editor = True
                 st.rerun()
                 
-        row_cols[9].markdown(f"<span class='name-text'>{tot_horas_empleado:g} Hrs</span>", unsafe_allow_html=True)
+        row_cols[9].markdown(f"<span class='header-text' style='margin-top:6px;'>{tot_horas_empleado:g} Hrs</span>", unsafe_allow_html=True)
         gran_total_horas += tot_horas_empleado
 
-st.markdown("<hr style='margin: 8px 0 4px 0; border-color:#dae0e5;'>", unsafe_allow_html=True)
+st.markdown("<hr style='margin: 10px 0 6px 0; border-color:#e5e7eb;'>", unsafe_allow_html=True)
+
+# MEJORA: Fila de resumen Total Active Staff centrada
 row_totals = st.columns(row_cols_layout)
-row_totals[1].markdown("<span class='header-text'>Total Active Staff:</span>", unsafe_allow_html=True)
-for i_day, day in enumerate(days): row_totals[i_day+2].markdown(f"<span class='header-text'>{totales_por_dia[day]} Guards</span>", unsafe_allow_html=True)
+row_totals[1].markdown("<span class='header-text-left'>Total Active Staff:</span>", unsafe_allow_html=True)
+
+for i_day, day in enumerate(days): 
+    row_totals[i_day+2].markdown(f"<span class='header-text'>{totales_por_dia[day]} Guards</span>", unsafe_allow_html=True)
+
 row_totals[9].markdown(f"<span class='header-text'>{gran_total_horas:g} Hrs</span>", unsafe_allow_html=True)
 
 # ==========================================
@@ -343,12 +412,12 @@ for turno in turnos_orden:
     cols_turno[0].markdown(f"<div class='shift-group-header'>⏳ {turno.upper()}</div>", unsafe_allow_html=True)
     for i_day, day in enumerate(days):
         datos_dia = cobertura_horaria_semanal[day]
-        if turno in datos_dia: cols_turno[i_day+1].markdown("<div style='background-color:#e8f0fe; font-size:10px; font-weight:bold; color:#1a73e8; text-align:center; padding:6px 0; border:1px solid #dae0e5;'>Active</div>", unsafe_allow_html=True)
-        else: cols_turno[i_day+1].markdown("<div style='background-color:#f8f9fa; color:#cbd5e1; font-size:10px; font-style:italic; text-align:center; padding:6px 0; border:1px solid #dae0e5;'>N/A</div>", unsafe_allow_html=True)
+        if turno in datos_dia: cols_turno[i_day+1].markdown("<div style='background-color:#e0f2fe; font-size:11px; font-weight:bold; color:#0369a1; text-align:center; padding:6px 0; border:1px solid #bae6fd;'>Active</div>", unsafe_allow_html=True)
+        else: cols_turno[i_day+1].markdown("<div style='background-color:#f8f9fa; color:#cbd5e1; font-size:11px; font-style:italic; text-align:center; padding:6px 0; border:1px solid #e5e7eb;'>N/A</div>", unsafe_allow_html=True)
     
     for rol in roles_criticos:
         cols_rol = st.columns([4.0] + [1.3] * 7 + [1.0])
-        cols_rol[0].markdown(f"<div class='role-row-header'>• {rol} <span style='font-size:10px; color:#6c757d;'>[Act / Min]</span></div>", unsafe_allow_html=True)
+        cols_rol[0].markdown(f"<div class='role-row-header'>• {rol} <span style='font-size:11px; color:#6b7280;'>[Act / Min]</span></div>", unsafe_allow_html=True)
         for i_day, day in enumerate(days):
             datos_dia = cobertura_horaria_semanal[day]
             if turno not in datos_dia:
@@ -356,13 +425,13 @@ for turno in turnos_orden:
                 continue
             info_turno = datos_dia[turno]
             if rol not in info_turno["req"] or (info_turno["req"][rol] == 0 and info_turno["act"][rol] == 0):
-                cols_rol[i_day+1].markdown("<div class='pos-cell' style='background:#ffffff; color:#94a3b8;'>0 / 0</div>", unsafe_allow_html=True)
+                cols_rol[i_day+1].markdown("<div class='pos-cell' style='background:#ffffff; color:#9ca3af;'>0 / 0</div>", unsafe_allow_html=True)
                 continue
             act, req = info_turno["act"][rol], info_turno["req"][rol]
             
-            if act < req: color_bg, color_txt, label = "#fce8e6", "#c5221f", f"🔴 {act}/{req} Deficit"
-            elif act == req: color_bg, color_txt, label = "#fef7e0", "#b06000", f"🟡 {act}/{req} Limit"
-            else: color_bg, color_txt, label = "#e6f4ea", "#137333", f"🟢 {act}/{req} Surplus"
+            if act < req: color_bg, color_txt, label = "#fef2f2", "#dc2626", f"🔴 {act}/{req} Deficit"
+            elif act == req: color_bg, color_txt, label = "#fefce8", "#ca8a04", f"🟡 {act}/{req} Limit"
+            else: color_bg, color_txt, label = "#f0fdf4", "#16a34a", f"🟢 {act}/{req} Surplus"
             
             cols_rol[i_day+1].markdown(f"<div class='pos-cell' style='background-color:{color_bg}; color:{color_txt};'>{label}</div>", unsafe_allow_html=True)
 
@@ -389,4 +458,4 @@ df_export = pd.DataFrame(csv_rows[1:], columns=csv_rows[0])
 csv_buffer = df_export.to_csv(index=False).encode('utf-8-sig')
 
 st.write("")
-st.download_button(label="📥 DOWNLOAD WEEKLY MATRIX (CSV FOR EXCEL)", data=csv_buffer, file_name=f"Schedule_{semana_activa.replace(' ', '_')}.csv", mime="text/csv")
+st.download_button(label="📥 DOWNLOAD WEEKLY MATRIX (CSV FOR EXCEL)", data=csv_buffer, file_name=f"Schedule_{semana_activa.split(' ')[0]}_{semana_activa.split(' ')[1]}.csv", mime="text/csv")
