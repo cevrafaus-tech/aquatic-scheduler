@@ -2,16 +2,22 @@ import streamlit as st
 import pandas as pd
 import datetime
 import random
+import io
 from supabase import create_client, Client
+
+# Librerías para generación de reporte en PDF
+from reportlab.lib.pagesizes import letter, landscape
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib import colors
 
 st.set_page_config(page_title="Aquatic Facilities Scheduler Enterprise", layout="wide")
 
 # ==========================================
-# ADVANCED INTERFACE STYLING (IMPROVED UI & CONTRAST)
+# ADVANCED INTERFACE STYLING (IMPROVED UI)
 # ==========================================
 st.markdown("""
 <style>
-    /* Botones de celdas: Tipografía optimizada a 12px con alto contraste */
     div.stButton > button {
         width: 100%;
         border-radius: 6px !important;
@@ -40,19 +46,16 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
     }
     
-    /* Tipografía mejorada */
     .role-text { color: #1a73e8; font-weight: 700; font-size: 12px !important; font-family: sans-serif; display: inline-block; margin-top: 6px; }
     .name-text { color: #1f2937; font-weight: 700; font-size: 12px !important; font-family: sans-serif; display: inline-block; margin-top: 6px; }
     .header-text { color: #111827; font-weight: 700; font-size: 12px !important; font-family: sans-serif; text-align: center; display: block; }
     .header-text-left { color: #111827; font-weight: 700; font-size: 12px !important; font-family: sans-serif; text-align: left; display: block; }
     
-    /* Titulares y bloques de alarmas posicionales */
     .matrix-title { background-color: #1e293b; color: #ffffff; font-size: 13px; font-weight: 700; padding: 10px; text-align: left; margin-top: 24px; border-radius: 4px; }
     .shift-group-header { background-color: #e0f2fe; font-weight: 700; font-size: 12px; color: #0369a1; text-align: left; padding: 6px 10px; border: 1px solid #bae6fd; }
     .role-row-header { background-color: #ffffff; font-weight: 600; font-size: 12px; text-align: left; padding: 6px 6px 6px 20px; color: #374151; border: 1px solid #e5e7eb; }
     .pos-cell { font-weight: 700; font-size: 11px; text-align: center; padding: 6px 4px; border: 1px solid #e5e7eb; border-radius: 3px; }
 
-    /* Tarjetas de diseño para la Vista Móvil */
     .mobile-card {
         background-color: #ffffff;
         border: 1px solid #e5e7eb;
@@ -138,26 +141,21 @@ def guardar_guardia_en_supabase(g):
         return True
     except: return False
 
-def callback_guardar_nuevo_guardia():
-    val_name = st.session_state.get("input_new_name", "").strip()
-    val_last = st.session_state.get("input_new_last", "").strip()
-    val_role = st.session_state.get("input_new_role", "Lifeguard II")
-    
-    if val_name and val_last and val_role:
-        full_key = f"{val_name} {val_last}"
-        if 'empleados' not in st.session_state: st.session_state.empleados = []
-        existe_duplicado = any(e['name'].strip().lower() == val_name.lower() and e['lastname'].strip().lower() == val_last.lower() for e in st.session_state.empleados)
-        if existe_duplicado:
-            st.session_state["mensaje_error_crud"] = f"❌ Error: El empleado '{full_key}' ya existe."
-            return
-        val_num = st.session_state.get("input_new_num", "").strip() or f"TEMP-{random.randint(10000, 99999)}"
-        nuevo_guard = {"employee_number": val_num, "name": val_name, "lastname": val_last, "role": val_role, "phone": "", "email": ""}
-        st.session_state.empleados.append(nuevo_guard)
-        st.session_state.matriz_horario[full_key] = {d: {"rotation": "OFF", "hours": "", "location": "Shenandoah"} for d in ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]}
-        guardar_guardia_en_supabase(nuevo_guard)
-        st.session_state["input_new_name"] = ""
-        st.session_state["input_new_last"] = ""
-        st.session_state["input_new_num"] = ""
+def actualizar_guardia_en_supabase(emp_number, datos_actualizados):
+    try:
+        supabase.table("directorio_personal").update(datos_actualizados).eq("employee_number", emp_number).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error al actualizar en DB: {e}")
+        return False
+
+def eliminar_guardia_de_supabase(emp_number):
+    try:
+        supabase.table("directorio_personal").delete().eq("employee_number", emp_number).execute()
+        return True
+    except Exception as e:
+        st.error(f"Error al eliminar de DB: {e}")
+        return False
 
 # ==========================================
 # STATE INITIALIZATION
@@ -179,10 +177,8 @@ if "show_editor" not in st.session_state: st.session_state.show_editor = False
 # ==========================================
 st.sidebar.header("📋 Administration Panel")
 
-# CONMUTADOR DE VISTA RESPONSIVE
-vista_modo = st.sidebar.radio("📱 Display Mode / Modo de Vista", ["🖥️ Desktop Grid", "📱 Mobile Cards"], index=0)
+vista_modo = st.sidebar.radio("📱 Display Mode", ["🖥️ Desktop Grid", "📱 Mobile Cards"], index=0)
 
-# CALLBACK AL CAMBIAR LA SEMANA
 def callback_cambio_semana_activa():
     semana_sel = st.session_state.selector_semana_global
     try:
@@ -207,14 +203,91 @@ semana_activa = st.sidebar.selectbox("Active Schedule Week", lista_semanas_2026,
 if not st.session_state.matriz_horario:
     callback_cambio_semana_activa()
 
-# 1. Personnel CRUD Management
+# ------------------------------------------
+# 1. PERSONNEL CRUD MANAGEMENT (AGREGAR / EDITAR / ELIMINAR)
+# ------------------------------------------
 with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
-    crud_mode = st.radio("Action", ["Add New"], horizontal=True)
+    crud_mode = st.radio("Action Mode", ["Add New", "Edit Existing", "Delete Staff"], horizontal=True)
+    
+    # MODO 1: AGREGAR
     if crud_mode == "Add New":
         st.text_input("First Name *", key="input_new_name")
         st.text_input("Last Name *", key="input_new_last")
         st.selectbox("Official Role *", ["Pool Supervisor", "Aquatic Specialist", "Lifeguard II", "Seasonal Lifeguard II", "WSI", "LG1", "Collection Clerk"], key="input_new_role")
-        st.button("💾 Save New Guard", on_click=callback_guardar_nuevo_guardia)
+        
+        if st.button("💾 Save New Guard"):
+            val_name = st.session_state.get("input_new_name", "").strip()
+            val_last = st.session_state.get("input_new_last", "").strip()
+            val_role = st.session_state.get("input_new_role", "Lifeguard II")
+            if val_name and val_last:
+                full_key = f"{val_name} {val_last}"
+                existe = any(e['name'].strip().lower() == val_name.lower() and e['lastname'].strip().lower() == val_last.lower() for e in st.session_state.empleados)
+                if existe:
+                    st.error(f"El empleado '{full_key}' ya existe.")
+                else:
+                    val_num = f"TEMP-{random.randint(10000, 99999)}"
+                    nuevo = {"employee_number": val_num, "name": val_name, "lastname": val_last, "role": val_role, "phone": "", "email": ""}
+                    st.session_state.empleados.append(nuevo)
+                    st.session_state.matriz_horario[full_key] = {d: {"rotation": "OFF", "hours": "", "location": "Shenandoah"} for d in days}
+                    guardar_guardia_en_supabase(nuevo)
+                    st.success("Guardia agregado!")
+                    st.rerun()
+
+    # MODO 2: EDITAR REGISTRO
+    elif crud_mode == "Edit Existing":
+        if st.session_state.empleados:
+            lista_nombres_edit = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
+            emp_a_editar = st.selectbox("Select Staff Member to Edit", lista_nombres_edit)
+            
+            # Buscar objeto actual
+            obj_emp = next((e for e in st.session_state.empleados if f"{e['name']} {e['lastname']}" == emp_a_editar), None)
+            if obj_emp:
+                edit_fn = st.text_input("First Name", value=obj_emp["name"])
+                edit_ln = st.text_input("Last Name", value=obj_emp["lastname"])
+                roles_lista = ["Pool Supervisor", "Aquatic Specialist", "Lifeguard II", "Seasonal Lifeguard II", "WSI", "LG1", "Collection Clerk"]
+                idx_rol = roles_lista.index(obj_emp["role"]) if obj_emp["role"] in roles_lista else 2
+                edit_rl = st.selectbox("Official Role", roles_lista, index=idx_rol)
+                
+                if st.button("✏️ Update Staff Details"):
+                    nuevo_nombre_completo = f"{edit_fn.strip()} {edit_ln.strip()}"
+                    viejos_datos_key = f"{obj_emp['name']} {obj_emp['lastname']}"
+                    
+                    # Actualizar memoria local
+                    obj_emp["name"] = edit_fn.strip()
+                    obj_emp["lastname"] = edit_ln.strip()
+                    obj_emp["role"] = edit_rl
+                    
+                    if viejos_datos_key != nuevo_nombre_completo:
+                        st.session_state.matriz_horario[nuevo_nombre_completo] = st.session_state.matriz_horario.pop(viejos_datos_key)
+                    
+                    # Actualizar en Supabase
+                    actualizar_guardia_en_supabase(obj_emp["employee_number"], {"name": edit_fn.strip(), "lastname": edit_ln.strip(), "role": edit_rl})
+                    st.success("Registro actualizado exitosamente!")
+                    st.rerun()
+        else:
+            st.info("No hay personal registrado para editar.")
+
+    # MODO 3: ELIMINAR REGISTRO
+    elif crud_mode == "Delete Staff":
+        if st.session_state.empleados:
+            lista_nombres_del = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
+            emp_a_eliminar = st.selectbox("Select Staff Member to Remove", lista_nombres_del)
+            obj_emp_del = next((e for e in st.session_state.empleados if f"{e['name']} {e['lastname']}" == emp_a_eliminar), None)
+            
+            st.warning(f"⚠️ ¿Estás seguro de eliminar permanentemente a {emp_a_eliminar}?")
+            if st.button("🗑️ Confirm Delete Staff"):
+                if obj_emp_del:
+                    # Eliminar de la lista de memoria local
+                    st.session_state.empleados = [e for e in st.session_state.empleados if e["employee_number"] != obj_emp_del["employee_number"]]
+                    if emp_a_eliminar in st.session_state.matriz_horario:
+                        del st.session_state.matriz_horario[emp_a_eliminar]
+                    
+                    # Eliminar de Supabase
+                    eliminar_guardia_de_supabase(obj_emp_del["employee_number"])
+                    st.success("Empleado eliminado con éxito!")
+                    st.rerun()
+        else:
+            st.info("No hay personal para eliminar.")
 
 # 2. Database History Menu
 with st.sidebar.expander("🗄️ 2. Database History Menu", expanded=False):
@@ -347,6 +420,75 @@ prioridad_roles = {"Pool Supervisor": 1, "Aquatic Specialist": 2, "Lifeguard II"
 empleados_ordenados = sorted(st.session_state.empleados, key=lambda x: prioridad_roles.get(x["role"], 99))
 
 # ==========================================
+# FUNCIÓN DE GENERACIÓN DE IMPRESIÓN PDF (REPORTLAB)
+# ==========================================
+def generar_pdf_calendario(semana_str, lista_empleados, matriz_datos, filtro_ubicacion="All Facilities"):
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=landscape(letter), rightMargin=20, leftMargin=20, topMargin=20, bottomMargin=20)
+    story = []
+    styles = getSampleStyleSheet()
+
+    # Estilos de texto para el PDF
+    title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=16, leading=18, textColor=colors.HexColor('#1E293B'), alignment=0)
+    subtitle_style = ParagraphStyle('DocSubtitle', parent=styles['Normal'], fontSize=10, leading=12, textColor=colors.HexColor('#64748B'), alignment=0)
+    cell_header_style = ParagraphStyle('HeaderStyle', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.white, alignment=1, fontName="Helvetica-Bold")
+    cell_body_style = ParagraphStyle('BodyStyle', parent=styles['Normal'], fontSize=7, leading=8, alignment=1)
+    cell_body_left = ParagraphStyle('BodyLeft', parent=styles['Normal'], fontSize=7, leading=8, alignment=0)
+
+    # Título institucional
+    story.append(Paragraph(f"<b>CITY OF MIAMI — AQUATIC FACILITIES SCHEDULE</b>", title_style))
+    story.append(Paragraph(f"Active Period: <b>{semana_str}</b> | Filter: <b>{filtro_ubicacion}</b>", subtitle_style))
+    story.append(Spacer(1, 10))
+
+    # Definir estructura de columnas de la tabla del PDF
+    # Total ancho landscape letter ~ 750pt
+    col_widths = [100, 85, 75, 75, 75, 75, 75, 75, 75, 45]
+    headers_pdf = [Paragraph("Role", cell_header_style), Paragraph("Employee", cell_header_style)] + [Paragraph(d[:3], cell_header_style) for d in days] + [Paragraph("Total", cell_header_style)]
+    
+    table_data = [headers_pdf]
+
+    for emp in lista_empleados:
+        f_id = f"{emp['name']} {emp['lastname']}"
+        if f_id in matriz_datos:
+            row = [
+                Paragraph(f"<b>{emp['role']}</b>", cell_body_left),
+                Paragraph(f_id, cell_body_left)
+            ]
+            tot_hrs = 0.0
+            for d in days:
+                c = matriz_datos[f_id][d]
+                # Aplicar filtro por ubicación si es necesario
+                if filtro_ubicacion != "All Facilities" and c["location"] != filtro_ubicacion and c["rotation"] not in ["OFF", "APP LWOP"]:
+                    row.append(Paragraph("OFF", cell_body_style))
+                elif c["rotation"] == "OFF":
+                    row.append(Paragraph("OFF", cell_body_style))
+                elif c["rotation"] == "APP LWOP":
+                    row.append(Paragraph("<font color='red'><b>LWOP</b></font>", cell_body_style))
+                else:
+                    hrs = calcular_delta_horas_exactas(c["rotation"], c["hours"])
+                    tot_hrs += hrs
+                    txt = f"<b>{c['rotation']}</b><br/>{c['hours']}<br/>@{c['location']}"
+                    row.append(Paragraph(txt, cell_body_style))
+            
+            row.append(Paragraph(f"<b>{tot_hrs:g} h</b>", cell_body_style))
+            table_data.append(row)
+
+    pdf_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    pdf_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1E293B')),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#CBD5E1')),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]))
+    
+    story.append(pdf_table)
+    doc.build(story)
+    buffer.seek(0)
+    return buffer
+
+# ==========================================
 # MODO DE VISTA 1: DESKTOP GRID (MATRIZ DE ESCRITORIO)
 # ==========================================
 if vista_modo == "🖥️ Desktop Grid":
@@ -414,12 +556,11 @@ if vista_modo == "🖥️ Desktop Grid":
     row_totals[9].markdown(f"<span class='header-text'>{gran_total_horas:g} Hrs</span>", unsafe_allow_html=True)
 
 # ==========================================
-# MODO DE VISTA 2: MOBILE CARDS (VISTA TÁCTIL MÓVIL)
+# MODO DE VISTA 2: MOBILE CARDS
 # ==========================================
 else:
     st.markdown(f"### 📱 Mobile Daily Schedule — {semana_activa}")
     
-    # Filtro rápido de día para teléfonos móviles
     selected_mobile_day = st.radio("Select Day / Seleccionar Día", days, horizontal=True)
     st.write("---")
     
@@ -464,7 +605,7 @@ else:
     st.info(f"📊 **Summary for {selected_mobile_day}:** {activos_hoy} Active Staff On Duty | {horas_hoy:g} Total Scheduled Hours")
 
 # ==========================================
-# SECCIÓN: MATRIZ DE ALARMAS POSICIONALES (AMBAS VISTAS)
+# SECCIÓN: MATRIZ DE ALARMAS POSICIONALES
 # ==========================================
 st.markdown("<div class='matrix-title'>📋 LIVE SHIFT POSITIONAL ALERTS (ROLE & ROTATION CHECKS)</div>", unsafe_allow_html=True)
 
@@ -500,26 +641,51 @@ for turno in turnos_orden:
             cols_rol[i_day+1].markdown(f"<div class='pos-cell' style='background-color:{color_bg}; color:{color_txt};'>{label}</div>", unsafe_allow_html=True)
 
 # ==========================================
-# CONVERTIDOR DE MATRIZ A CSV
+# SECCIÓN: EXPORTACIÓN (CSV & PDF PRINT)
 # ==========================================
-csv_rows = [["Employee ID", "Official Role", "Full Name", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Total Weekly Hours"]]
-for emp in empleados_ordenados:
-    f_id = f"{emp['name']} {emp['lastname']}"
-    if f_id in st.session_state.matriz_horario:
-        row_data = [emp["employee_number"], emp["role"], f_id]
-        tot_horas_empleado = 0.0
-        for day in days:
-            cell = st.session_state.matriz_horario[f_id][day]
-            if cell["rotation"] in ["OFF", "APP LWOP"]: row_data.append(cell["rotation"])
-            else:
-                horas_dia = calcular_delta_horas_exactas(cell["rotation"], cell["hours"])
-                tot_horas_empleado += horas_dia
-                row_data.append(f"{cell['rotation']} ({cell['hours']}) @ {cell['location']} [{horas_dia:g} Hrs]")
-        row_data.append(f"{tot_horas_empleado:g}")
-        csv_rows.append(row_data)
-
-df_export = pd.DataFrame(csv_rows[1:], columns=csv_rows[0])
-csv_buffer = df_export.to_csv(index=False).encode('utf-8-sig')
-
 st.write("")
-st.download_button(label="📥 DOWNLOAD WEEKLY MATRIX (CSV FOR EXCEL)", data=csv_buffer, file_name=f"Schedule_{semana_activa.split(' ')[0]}_{semana_activa.split(' ')[1]}.csv", mime="text/csv")
+st.markdown("### 🖨️ Export & Print Options")
+
+col_exp_csv, col_exp_pdf = st.columns(2)
+
+# EXPORTACIÓN 1: CSV EXCEL
+with col_exp_csv:
+    csv_rows = [["Employee ID", "Official Role", "Full Name", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Total Weekly Hours"]]
+    for emp in empleados_ordenados:
+        f_id = f"{emp['name']} {emp['lastname']}"
+        if f_id in st.session_state.matriz_horario:
+            row_data = [emp["employee_number"], emp["role"], f_id]
+            tot_horas_empleado = 0.0
+            for day in days:
+                cell = st.session_state.matriz_horario[f_id][day]
+                if cell["rotation"] in ["OFF", "APP LWOP"]: row_data.append(cell["rotation"])
+                else:
+                    horas_dia = calcular_delta_horas_exactas(cell["rotation"], cell["hours"])
+                    tot_horas_empleado += horas_dia
+                    row_data.append(f"{cell['rotation']} ({cell['hours']}) @ {cell['location']} [{horas_dia:g} Hrs]")
+            row_data.append(f"{tot_horas_empleado:g}")
+            csv_rows.append(row_data)
+
+    df_export = pd.DataFrame(csv_rows[1:], columns=csv_rows[0])
+    csv_buffer = df_export.to_csv(index=False).encode('utf-8-sig')
+
+    st.download_button(
+        label="📥 DOWNLOAD WEEKLY MATRIX (CSV FOR EXCEL)",
+        data=csv_buffer,
+        file_name=f"Schedule_{semana_activa.split(' ')[0]}_{semana_activa.split(' ')[1]}.csv",
+        mime="text/csv",
+        use_container_width=True
+    )
+
+# EXPORTACIÓN 2: PDF PRINT
+with col_exp_pdf:
+    filtro_pdf_loc = st.selectbox("PDF Location Filter", ["All Facilities"] + locations, index=0)
+    pdf_bytes = generar_pdf_calendario(semana_activa, empleados_ordenados, st.session_state.matriz_horario, filtro_pdf_loc)
+    
+    st.download_button(
+        label="🖨️ PRINT / DOWNLOAD OFFICIAL SCHEDULE (PDF)",
+        data=pdf_bytes,
+        file_name=f"Official_Schedule_{semana_activa.split(' ')[0]}_{semana_activa.split(' ')[1]}.pdf",
+        mime="application/pdf",
+        use_container_width=True
+    )
