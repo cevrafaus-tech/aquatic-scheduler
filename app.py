@@ -25,7 +25,6 @@ st.markdown("""
         box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05) !important;
     }
 
-    /* Estilo del texto interior del botón */
     div.stButton > button p {
         font-size: 12px !important;
         font-weight: 600 !important;
@@ -41,7 +40,7 @@ st.markdown("""
         box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1) !important;
     }
     
-    /* Tipografía mejorada para etiquetas y encabezados de la grilla */
+    /* Tipografía mejorada */
     .role-text { color: #1a73e8; font-weight: 700; font-size: 12px !important; font-family: sans-serif; display: inline-block; margin-top: 6px; }
     .name-text { color: #1f2937; font-weight: 700; font-size: 12px !important; font-family: sans-serif; display: inline-block; margin-top: 6px; }
     .header-text { color: #111827; font-weight: 700; font-size: 12px !important; font-family: sans-serif; text-align: center; display: block; }
@@ -52,11 +51,25 @@ st.markdown("""
     .shift-group-header { background-color: #e0f2fe; font-weight: 700; font-size: 12px; color: #0369a1; text-align: left; padding: 6px 10px; border: 1px solid #bae6fd; }
     .role-row-header { background-color: #ffffff; font-weight: 600; font-size: 12px; text-align: left; padding: 6px 6px 6px 20px; color: #374151; border: 1px solid #e5e7eb; }
     .pos-cell { font-weight: 700; font-size: 11px; text-align: center; padding: 6px 4px; border: 1px solid #e5e7eb; border-radius: 3px; }
+
+    /* Tarjetas de diseño para la Vista Móvil */
+    .mobile-card {
+        background-color: #ffffff;
+        border: 1px solid #e5e7eb;
+        border-left: 4px solid #1a73e8;
+        border-radius: 8px;
+        padding: 12px;
+        margin-bottom: 12px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .mobile-card-title { font-weight: 700; font-size: 14px; color: #111827; }
+    .mobile-card-role { font-weight: 600; font-size: 12px; color: #1a73e8; }
+    .mobile-card-detail { font-size: 12px; color: #4b5563; margin-top: 4px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# SUPABASE CONNECTION SETUP (PARCHED & SECURE)
+# SUPABASE CONNECTION SETUP
 # ==========================================
 try:
     raw_url = st.secrets["SUPABASE_URL"].strip()
@@ -166,7 +179,10 @@ if "show_editor" not in st.session_state: st.session_state.show_editor = False
 # ==========================================
 st.sidebar.header("📋 Administration Panel")
 
-# CALLBACK AL CAMBIAR LA SEMANA: Carga automatizada desde Supabase
+# CONMUTADOR DE VISTA RESPONSIVE
+vista_modo = st.sidebar.radio("📱 Display Mode / Modo de Vista", ["🖥️ Desktop Grid", "📱 Mobile Cards"], index=0)
+
+# CALLBACK AL CAMBIAR LA SEMANA
 def callback_cambio_semana_activa():
     semana_sel = st.session_state.selector_semana_global
     try:
@@ -200,7 +216,7 @@ with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
         st.selectbox("Official Role *", ["Pool Supervisor", "Aquatic Specialist", "Lifeguard II", "Seasonal Lifeguard II", "WSI", "LG1", "Collection Clerk"], key="input_new_role")
         st.button("💾 Save New Guard", on_click=callback_guardar_nuevo_guardia)
 
-# 2. Database History Menu (Guardado y Retorno de Semanas)
+# 2. Database History Menu
 with st.sidebar.expander("🗄️ 2. Database History Menu", expanded=False):
     if st.button("💾 Save Active Week to Supabase"):
         try:
@@ -241,7 +257,7 @@ with st.sidebar.expander("🗄️ 2. Database History Menu", expanded=False):
             st.info("No saved weeks found in cloud database yet.")
     except Exception: pass
 
-# 3. Individual Shift Management (MEJORA 2: OFF Desmarcado por defecto)
+# 3. Individual Shift Management
 if st.session_state.show_editor and st.session_state.edit_target_emp:
     with st.sidebar.expander("⏳ 3. Assign / Edit Individual Shift", expanded=True):
         current_staff_keys = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
@@ -257,7 +273,6 @@ if st.session_state.show_editor and st.session_state.edit_target_emp:
         with col_end: end_time = st.selectbox("End Time", horas_validadas, index=29)
         selected_loc = st.selectbox("Individual Location", locations, index=locations.index(current_data['location']) if current_data['location'] in locations else 2)
         
-        # MEJORA: value=False para que NO aparezca marcado por defecto
         mark_off = st.checkbox("Mark Employee as OFF Duty / LWOP", value=False)
 
         col_save, col_close = st.columns(2)
@@ -328,79 +343,128 @@ def calcular_cobertura_real_por_horas(target_day):
 
 cobertura_horaria_semanal = {day: calcular_cobertura_real_por_horas(day) for day in days}
 
-# ==========================================
-# INTERACTIVE MASTER GRID DESIGN (MEJORA: ALINEACIÓN Y TIPOGRAFÍA)
-# ==========================================
-st.markdown(f"### 📅 Master Staff Schedule — {semana_activa}")
-
 prioridad_roles = {"Pool Supervisor": 1, "Aquatic Specialist": 2, "Lifeguard II": 3, "Seasonal Lifeguard II": 4, "WSI": 5, "LG1": 6, "Collection Clerk": 7}
 empleados_ordenados = sorted(st.session_state.empleados, key=lambda x: prioridad_roles.get(x["role"], 99))
 
-row_cols_layout = [1.8, 1.5, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.0]
-cols_header = st.columns(row_cols_layout)
+# ==========================================
+# MODO DE VISTA 1: DESKTOP GRID (MATRIZ DE ESCRITORIO)
+# ==========================================
+if vista_modo == "🖥️ Desktop Grid":
+    st.markdown(f"### 📅 Master Staff Schedule — {semana_activa}")
 
-cols_header[0].markdown("<span class='header-text-left'>Role Hierarchy</span>", unsafe_allow_html=True)
-cols_header[1].markdown("<span class='header-text-left'>Full Name</span>", unsafe_allow_html=True)
+    row_cols_layout = [1.8, 1.5, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.0]
+    cols_header = st.columns(row_cols_layout)
 
-# MEJORA: Días centrados explícitamente en el encabezado
-for i, day in enumerate(days): 
-    cols_header[i+2].markdown(f"<span class='header-text'>{day[:3]}</span>", unsafe_allow_html=True)
+    cols_header[0].markdown("<span class='header-text-left'>Role Hierarchy</span>", unsafe_allow_html=True)
+    cols_header[1].markdown("<span class='header-text-left'>Full Name</span>", unsafe_allow_html=True)
 
-cols_header[9].markdown("<span class='header-text'>Total</span>", unsafe_allow_html=True)
-st.markdown("<hr style='margin: 6px 0 14px 0; border-color:#e5e7eb;'>", unsafe_allow_html=True)
+    for i, day in enumerate(days): 
+        cols_header[i+2].markdown(f"<span class='header-text'>{day[:3]}</span>", unsafe_allow_html=True)
 
-totales_por_dia = {day: 0 for day in days}
-gran_total_horas = 0.0
+    cols_header[9].markdown("<span class='header-text'>Total</span>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin: 6px 0 14px 0; border-color:#e5e7eb;'>", unsafe_allow_html=True)
 
-for idx_emp, emp in enumerate(empleados_ordenados):
-    f_id = f"{emp['name']} {emp['lastname']}"
-    if f_id in st.session_state.matriz_horario:
-        row_cols = st.columns(row_cols_layout)
-        
-        row_cols[0].markdown(f"<span class='role-text'>{emp['role']}</span>", unsafe_allow_html=True)
-        row_cols[1].markdown(f"<span class='name-text'>{f_id}</span>", unsafe_allow_html=True)
-        
-        tot_horas_empleado = 0.0
-        for i_day, day in enumerate(days):
-            cell = st.session_state.matriz_horario[f_id][day]
-            horas_dia = calcular_delta_horas_exactas(cell["rotation"], cell["hours"])
+    totales_por_dia = {day: 0 for day in days}
+    gran_total_horas = 0.0
+
+    for idx_emp, emp in enumerate(empleados_ordenados):
+        f_id = f"{emp['name']} {emp['lastname']}"
+        if f_id in st.session_state.matriz_horario:
+            row_cols = st.columns(row_cols_layout)
             
-            if cell["rotation"] == "OFF": 
-                btn_label = "OFF"
-            elif cell["rotation"] == "APP LWOP": 
-                btn_label = ":red[APP LWOP]"
-            else:
-                btn_label = (
-                    f":green[{cell['rotation']}]\n"
-                    f":blue[{cell['hours']}]\n"
-                    f":orange[@{cell['location']}]\n"
-                    f"{horas_dia:g} Hrs"
-                )
-                tot_horas_empleado += horas_dia
-                totales_por_dia[day] += 1
+            row_cols[0].markdown(f"<span class='role-text'>{emp['role']}</span>", unsafe_allow_html=True)
+            row_cols[1].markdown(f"<span class='name-text'>{f_id}</span>", unsafe_allow_html=True)
             
-            if row_cols[i_day+2].button(btn_label, key=f"cell_{idx_emp}_{i_day}", use_container_width=True):
-                st.session_state.edit_target_emp = f_id
-                st.session_state.edit_target_day = day
-                st.session_state.show_editor = True
-                st.rerun()
+            tot_horas_empleado = 0.0
+            for i_day, day in enumerate(days):
+                cell = st.session_state.matriz_horario[f_id][day]
+                horas_dia = calcular_delta_horas_exactas(cell["rotation"], cell["hours"])
                 
-        row_cols[9].markdown(f"<span class='header-text' style='margin-top:6px;'>{tot_horas_empleado:g} Hrs</span>", unsafe_allow_html=True)
-        gran_total_horas += tot_horas_empleado
+                if cell["rotation"] == "OFF": 
+                    btn_label = "OFF"
+                elif cell["rotation"] == "APP LWOP": 
+                    btn_label = ":red[APP LWOP]"
+                else:
+                    btn_label = (
+                        f":green[{cell['rotation']}]\n"
+                        f":blue[{cell['hours']}]\n"
+                        f":orange[@{cell['location']}]\n"
+                        f"{horas_dia:g} Hrs"
+                    )
+                    tot_horas_empleado += horas_dia
+                    totales_por_dia[day] += 1
+                
+                if row_cols[i_day+2].button(btn_label, key=f"cell_dt_{idx_emp}_{i_day}", use_container_width=True):
+                    st.session_state.edit_target_emp = f_id
+                    st.session_state.edit_target_day = day
+                    st.session_state.show_editor = True
+                    st.rerun()
+                    
+            row_cols[9].markdown(f"<span class='header-text' style='margin-top:6px;'>{tot_horas_empleado:g} Hrs</span>", unsafe_allow_html=True)
+            gran_total_horas += tot_horas_empleado
 
-st.markdown("<hr style='margin: 10px 0 6px 0; border-color:#e5e7eb;'>", unsafe_allow_html=True)
+    st.markdown("<hr style='margin: 10px 0 6px 0; border-color:#e5e7eb;'>", unsafe_allow_html=True)
 
-# MEJORA: Fila de resumen Total Active Staff centrada
-row_totals = st.columns(row_cols_layout)
-row_totals[1].markdown("<span class='header-text-left'>Total Active Staff:</span>", unsafe_allow_html=True)
+    row_totals = st.columns(row_cols_layout)
+    row_totals[1].markdown("<span class='header-text-left'>Total Active Staff:</span>", unsafe_allow_html=True)
 
-for i_day, day in enumerate(days): 
-    row_totals[i_day+2].markdown(f"<span class='header-text'>{totales_por_dia[day]} Guards</span>", unsafe_allow_html=True)
+    for i_day, day in enumerate(days): 
+        row_totals[i_day+2].markdown(f"<span class='header-text'>{totales_por_dia[day]} Guards</span>", unsafe_allow_html=True)
 
-row_totals[9].markdown(f"<span class='header-text'>{gran_total_horas:g} Hrs</span>", unsafe_allow_html=True)
+    row_totals[9].markdown(f"<span class='header-text'>{gran_total_horas:g} Hrs</span>", unsafe_allow_html=True)
 
 # ==========================================
-# SECCIÓN: MATRIZ DE ALARMAS POSICIONALES
+# MODO DE VISTA 2: MOBILE CARDS (VISTA TÁCTIL MÓVIL)
+# ==========================================
+else:
+    st.markdown(f"### 📱 Mobile Daily Schedule — {semana_activa}")
+    
+    # Filtro rápido de día para teléfonos móviles
+    selected_mobile_day = st.radio("Select Day / Seleccionar Día", days, horizontal=True)
+    st.write("---")
+    
+    activos_hoy = 0
+    horas_hoy = 0.0
+    
+    for idx_emp, emp in enumerate(empleados_ordenados):
+        f_id = f"{emp['name']} {emp['lastname']}"
+        if f_id in st.session_state.matriz_horario:
+            cell = st.session_state.matriz_horario[f_id][selected_mobile_day]
+            horas_dia = calcular_delta_horas_exactas(cell["rotation"], cell["hours"])
+            
+            with st.container():
+                col_info, col_action = st.columns([2.5, 1.2])
+                
+                with col_info:
+                    st.markdown(f"""
+                    <div class="mobile-card">
+                        <div class="mobile-card-title">{f_id}</div>
+                        <div class="mobile-card-role">{emp['role']}</div>
+                        <div class="mobile-card-detail">
+                            <b>Status:</b> {cell['rotation']}<br>
+                            <b>Hours:</b> {cell['hours'] if cell['hours'] else 'N/A'} ({horas_dia:g} Hrs)<br>
+                            <b>Location:</b> @{cell['location']}
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                with col_action:
+                    st.write("")
+                    btn_mobile_label = "✏️ Edit Shift" if cell["rotation"] != "OFF" else "➕ Assign"
+                    if st.button(btn_mobile_label, key=f"cell_mb_{idx_emp}_{selected_mobile_day}", use_container_width=True):
+                        st.session_state.edit_target_emp = f_id
+                        st.session_state.edit_target_day = selected_mobile_day
+                        st.session_state.show_editor = True
+                        st.rerun()
+            
+            if cell["rotation"] not in ["OFF", "APP LWOP"]:
+                activos_hoy += 1
+                horas_hoy += horas_dia
+
+    st.info(f"📊 **Summary for {selected_mobile_day}:** {activos_hoy} Active Staff On Duty | {horas_hoy:g} Total Scheduled Hours")
+
+# ==========================================
+# SECCIÓN: MATRIZ DE ALARMAS POSICIONALES (AMBAS VISTAS)
 # ==========================================
 st.markdown("<div class='matrix-title'>📋 LIVE SHIFT POSITIONAL ALERTS (ROLE & ROTATION CHECKS)</div>", unsafe_allow_html=True)
 
