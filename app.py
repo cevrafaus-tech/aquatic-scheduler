@@ -88,9 +88,9 @@ except Exception as e:
     st.stop()
 
 # ==========================================
-# HELPER: CÁLCULO DE FECHAS DE SEMANAS (2026)
+# HELPER: CÁLCULO DE FECHAS DE SEMANAS (2026) Y EVALUACIÓN DE SEMANAS PASADAS
 # ==========================================
-def obtener_rango_fechas_semana(num_semana, ao=2026):
+def obtener_detalles_semana(num_semana, ao=2026):
     primera_fecha = datetime.date(ao, 1, 1)
     dias_hasta_domingo = (6 - primera_fecha.weekday()) % 7
     primer_domingo = primera_fecha + datetime.timedelta(days=dias_hasta_domingo)
@@ -98,9 +98,20 @@ def obtener_rango_fechas_semana(num_semana, ao=2026):
     inicio_semana = primer_domingo + datetime.timedelta(weeks=num_semana - 1)
     fin_semana = inicio_semana + datetime.timedelta(days=6)
     
-    return f"Week {num_semana} ({inicio_semana.strftime('%b %d')} - {fin_semana.strftime('%b %d')})"
+    label_str = f"Week {num_semana} ({inicio_semana.strftime('%b %d')} - {fin_semana.strftime('%b %d')})"
+    return label_str, inicio_semana, fin_semana
 
-lista_semanas_2026 = [obtener_rango_fechas_semana(i) for i in range(1, 53)]
+# Generar catálogo de semanas con metadatos
+catalogo_semanas = {}
+lista_semanas_2026 = []
+for i in range(1, 53):
+    lbl, inicio, fin = obtener_detalles_semana(i)
+    catalogo_semanas[lbl] = {"num": i, "inicio": inicio, "fin": fin}
+    lista_semanas_2026.append(lbl)
+
+# Cálculo de la semana calendario actual (Para bloqueos de seguridad)
+hoy = datetime.date.today()
+num_semana_actual = hoy.isocalendar()[1]
 
 # ==========================================
 # BACKEND SUPABASE PERSISTENCE FUNCTIONS
@@ -157,6 +168,20 @@ def eliminar_guardia_de_supabase(emp_number):
         st.error(f"Error al eliminar de DB: {e}")
         return False
 
+def guardar_semana_en_supabase(target_week_name, empleados_list, matriz_horario_dict, days_list):
+    supabase.table("asignaciones").delete().eq("semana", target_week_name).execute()
+    bulk_inserts = []
+    for emp in empleados_list:
+        f_id = f"{emp['name']} {emp['lastname']}"
+        for day in days_list:
+            c = matriz_horario_dict[f_id][day]
+            bulk_inserts.append({
+                "semana": target_week_name, "empleado": f_id, "rol": emp["role"],
+                "dia": day, "rotation": c["rotation"], "hours": c["hours"], "location": c["location"]
+            })
+    if bulk_inserts:
+        supabase.table("asignaciones").insert(bulk_inserts).execute()
+
 # ==========================================
 # STATE INITIALIZATION
 # ==========================================
@@ -198,18 +223,21 @@ def callback_cambio_semana_activa():
         if emp_name in st.session_state.matriz_horario:
             st.session_state.matriz_horario[emp_name][d_name] = {"rotation": r["rotation"], "hours": r["hours"], "location": r["location"]}
 
-semana_activa = st.sidebar.selectbox("Active Schedule Week", lista_semanas_2026, index=25, key="selector_semana_global", on_change=callback_cambio_semana_activa)
+# Índice por defecto en la semana actual
+idx_semana_actual = min(max(num_semana_actual - 1, 0), 51)
+semana_activa = st.sidebar.selectbox("Active Schedule Week", lista_semanas_2026, index=idx_semana_actual, key="selector_semana_global", on_change=callback_cambio_semana_activa)
 
 if not st.session_state.matriz_horario:
     callback_cambio_semana_activa()
 
-# ------------------------------------------
-# 1. PERSONNEL CRUD MANAGEMENT (AGREGAR / EDITAR / ELIMINAR)
-# ------------------------------------------
+# Evaluación de bloqueo para la semana seleccionada en la vista principal
+num_sem_activa = catalogo_semanas[semana_activa]["num"]
+es_semana_pasada = num_sem_activa < num_semana_actual
+
+# 1. Personnel CRUD Management
 with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
     crud_mode = st.radio("Action Mode", ["Add New", "Edit Existing", "Delete Staff"], horizontal=True)
     
-    # MODO 1: AGREGAR
     if crud_mode == "Add New":
         st.text_input("First Name *", key="input_new_name")
         st.text_input("Last Name *", key="input_new_last")
@@ -233,13 +261,10 @@ with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
                     st.success("Guardia agregado!")
                     st.rerun()
 
-    # MODO 2: EDITAR REGISTRO
     elif crud_mode == "Edit Existing":
         if st.session_state.empleados:
             lista_nombres_edit = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
             emp_a_editar = st.selectbox("Select Staff Member to Edit", lista_nombres_edit)
-            
-            # Buscar objeto actual
             obj_emp = next((e for e in st.session_state.empleados if f"{e['name']} {e['lastname']}" == emp_a_editar), None)
             if obj_emp:
                 edit_fn = st.text_input("First Name", value=obj_emp["name"])
@@ -252,7 +277,6 @@ with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
                     nuevo_nombre_completo = f"{edit_fn.strip()} {edit_ln.strip()}"
                     viejos_datos_key = f"{obj_emp['name']} {obj_emp['lastname']}"
                     
-                    # Actualizar memoria local
                     obj_emp["name"] = edit_fn.strip()
                     obj_emp["lastname"] = edit_ln.strip()
                     obj_emp["role"] = edit_rl
@@ -260,75 +284,88 @@ with st.sidebar.expander("👤 1. Manage Staff Members (CRUD)", expanded=False):
                     if viejos_datos_key != nuevo_nombre_completo:
                         st.session_state.matriz_horario[nuevo_nombre_completo] = st.session_state.matriz_horario.pop(viejos_datos_key)
                     
-                    # Actualizar en Supabase
                     actualizar_guardia_en_supabase(obj_emp["employee_number"], {"name": edit_fn.strip(), "lastname": edit_ln.strip(), "role": edit_rl})
-                    st.success("Registro actualizado exitosamente!")
+                    st.success("Registro actualizado!")
                     st.rerun()
         else:
-            st.info("No hay personal registrado para editar.")
+            st.info("No hay personal para editar.")
 
-    # MODO 3: ELIMINAR REGISTRO
     elif crud_mode == "Delete Staff":
         if st.session_state.empleados:
             lista_nombres_del = [f"{e['name']} {e['lastname']}" for e in st.session_state.empleados]
             emp_a_eliminar = st.selectbox("Select Staff Member to Remove", lista_nombres_del)
             obj_emp_del = next((e for e in st.session_state.empleados if f"{e['name']} {e['lastname']}" == emp_a_eliminar), None)
             
-            st.warning(f"⚠️ ¿Estás seguro de eliminar permanentemente a {emp_a_eliminar}?")
+            st.warning(f"⚠️ ¿Eliminar permanentemente a {emp_a_eliminar}?")
             if st.button("🗑️ Confirm Delete Staff"):
                 if obj_emp_del:
-                    # Eliminar de la lista de memoria local
                     st.session_state.empleados = [e for e in st.session_state.empleados if e["employee_number"] != obj_emp_del["employee_number"]]
                     if emp_a_eliminar in st.session_state.matriz_horario:
                         del st.session_state.matriz_horario[emp_a_eliminar]
-                    
-                    # Eliminar de Supabase
                     eliminar_guardia_de_supabase(obj_emp_del["employee_number"])
-                    st.success("Empleado eliminado con éxito!")
+                    st.success("Empleado eliminado!")
                     st.rerun()
         else:
             st.info("No hay personal para eliminar.")
 
-# 2. Database History Menu
-with st.sidebar.expander("🗄️ 2. Database History Menu", expanded=False):
-    if st.button("💾 Save Active Week to Supabase"):
-        try:
-            supabase.table("asignaciones").delete().eq("semana", semana_activa).execute()
-            bulk_inserts = []
-            for emp in st.session_state.empleados:
-                f_id = f"{emp['name']} {emp['lastname']}"
-                for day in days:
-                    c = st.session_state.matriz_horario[f_id][day]
-                    bulk_inserts.append({
-                        "semana": semana_activa, "empleado": f_id, "rol": emp["role"],
-                        "dia": day, "rotation": c["rotation"], "hours": c["hours"], "location": c["location"]
-                    })
-            if bulk_inserts:
-                supabase.table("asignaciones").insert(bulk_inserts).execute()
-            st.success("Archived in Supabase cloud!")
-        except Exception as e:
-            st.error(f"Cloud Save Error: {e}")
-
-    st.write("---")
+# ------------------------------------------
+# 2. DATABASE HISTORY MENU (CLONACIÓN, SAVE AS & LOCKING)
+# ------------------------------------------
+with st.sidebar.expander("🗄️ 2. Database History & Template Manager", expanded=True):
+    st.markdown("##### 1️⃣ Load Past Week as Template")
     try:
         response_dist = supabase.table("asignaciones").select("semana").execute()
-        df_semanas = pd.DataFrame(response_dist.data)
+        df_semanas_db = pd.DataFrame(response_dist.data)
         
-        if not df_semanas.empty:
-            lista_semanas_db = df_semanas["semana"].unique().tolist()
-            semana_consultar = st.selectbox("Select Saved Week to Load", lista_semanas_db, key="historial_dropdown_weeks")
-            if st.button("📂 Return / Load Selected Week"):
-                response_week = supabase.table("asignaciones").select("empleado, dia, rotation, hours, location").eq("semana", semana_consultar).execute()
+        if not df_semanas_db.empty:
+            lista_semanas_db = df_semanas_db["semana"].unique().tolist()
+            semana_plantilla = st.selectbox("Select Historical Week to Clone", lista_semanas_db, key="dropdown_semana_plantilla")
+            
+            if st.button("📂 Load / Clone Selected Week"):
+                response_week = supabase.table("asignaciones").select("empleado, dia, rotation, hours, location").eq("semana", semana_plantilla).execute()
                 for r in response_week.data:
                     emp_name = r["empleado"]
                     d_name = r["dia"]
                     if emp_name in st.session_state.matriz_horario:
                         st.session_state.matriz_horario[emp_name][d_name] = {"rotation": r["rotation"], "hours": r["hours"], "location": r["location"]}
-                st.success("Week loaded successfully!")
+                st.success(f"Loaded schedule from '{semana_plantilla}' into screen editor!")
                 st.rerun()
         else:
             st.info("No saved weeks found in cloud database yet.")
-    except Exception: pass
+    except Exception as e:
+        st.error(f"Error reading history: {e}")
+
+    st.write("---")
+    st.markdown("##### 2️⃣ Save Current View Options")
+
+    # Opción A: Save As (Guardar en semana actual o futura)
+    semana_destino = st.selectbox("Destination Week (Save As...)", lista_semanas_2026, index=idx_semana_actual, key="select_save_as_week")
+    num_sem_dest = catalogo_semanas[semana_destino]["num"]
+    es_destino_pasado = num_sem_dest < num_semana_actual
+
+    if st.button("💾 Save Current View As..."):
+        if es_destino_pasado:
+            st.error(f"🛑 Cannot save into '{semana_destino}' because it is a past closed week. Please select Week {num_semana_actual} or later.")
+        else:
+            try:
+                guardar_semana_en_supabase(semana_destino, st.session_state.empleados, st.session_state.matriz_horario, days)
+                st.success(f"Successfully projected and saved into '{semana_destino}'!")
+            except Exception as e:
+                st.error(f"Cloud Save Error: {e}")
+
+    st.write("")
+    
+    # Opción B: Sobrescribir semana activa (Sujeto a Bloqueo de Seguridad)
+    if es_semana_pasada:
+        st.warning("🛑 **Historical Week Locked:** This past week is archived and closed for compliance. Use 'Save As...' above to project these shifts into a current or future week.")
+        st.button("🔒 Overwrite Active Week (Disabled)", disabled=True)
+    else:
+        if st.button("💾 Overwrite Active Week"):
+            try:
+                guardar_semana_en_supabase(semana_activa, st.session_state.empleados, st.session_state.matriz_horario, days)
+                st.success(f"Overwritten directly in '{semana_activa}'!")
+            except Exception as e:
+                st.error(f"Cloud Save Error: {e}")
 
 # 3. Individual Shift Management
 if st.session_state.show_editor and st.session_state.edit_target_emp:
@@ -428,20 +465,16 @@ def generar_pdf_calendario(semana_str, lista_empleados, matriz_datos, filtro_ubi
     story = []
     styles = getSampleStyleSheet()
 
-    # Estilos de texto para el PDF
     title_style = ParagraphStyle('DocTitle', parent=styles['Heading1'], fontSize=16, leading=18, textColor=colors.HexColor('#1E293B'), alignment=0)
     subtitle_style = ParagraphStyle('DocSubtitle', parent=styles['Normal'], fontSize=10, leading=12, textColor=colors.HexColor('#64748B'), alignment=0)
     cell_header_style = ParagraphStyle('HeaderStyle', parent=styles['Normal'], fontSize=8, leading=9, textColor=colors.white, alignment=1, fontName="Helvetica-Bold")
     cell_body_style = ParagraphStyle('BodyStyle', parent=styles['Normal'], fontSize=7, leading=8, alignment=1)
     cell_body_left = ParagraphStyle('BodyLeft', parent=styles['Normal'], fontSize=7, leading=8, alignment=0)
 
-    # Título institucional
     story.append(Paragraph(f"<b>CITY OF MIAMI — AQUATIC FACILITIES SCHEDULE</b>", title_style))
     story.append(Paragraph(f"Active Period: <b>{semana_str}</b> | Filter: <b>{filtro_ubicacion}</b>", subtitle_style))
     story.append(Spacer(1, 10))
 
-    # Definir estructura de columnas de la tabla del PDF
-    # Total ancho landscape letter ~ 750pt
     col_widths = [100, 85, 75, 75, 75, 75, 75, 75, 75, 45]
     headers_pdf = [Paragraph("Role", cell_header_style), Paragraph("Employee", cell_header_style)] + [Paragraph(d[:3], cell_header_style) for d in days] + [Paragraph("Total", cell_header_style)]
     
@@ -457,7 +490,6 @@ def generar_pdf_calendario(semana_str, lista_empleados, matriz_datos, filtro_ubi
             tot_hrs = 0.0
             for d in days:
                 c = matriz_datos[f_id][d]
-                # Aplicar filtro por ubicación si es necesario
                 if filtro_ubicacion != "All Facilities" and c["location"] != filtro_ubicacion and c["rotation"] not in ["OFF", "APP LWOP"]:
                     row.append(Paragraph("OFF", cell_body_style))
                 elif c["rotation"] == "OFF":
@@ -493,6 +525,9 @@ def generar_pdf_calendario(semana_str, lista_empleados, matriz_datos, filtro_ubi
 # ==========================================
 if vista_modo == "🖥️ Desktop Grid":
     st.markdown(f"### 📅 Master Staff Schedule — {semana_activa}")
+    
+    if es_semana_pasada:
+        st.info("🔒 **Historical View (Read-Only Mode):** Viewing an archived past week. You can edit shifts dynamically and project them into the future using **'Save As...'** in the sidebar.")
 
     row_cols_layout = [1.8, 1.5, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.3, 1.0]
     cols_header = st.columns(row_cols_layout)
@@ -561,6 +596,9 @@ if vista_modo == "🖥️ Desktop Grid":
 else:
     st.markdown(f"### 📱 Mobile Daily Schedule — {semana_activa}")
     
+    if es_semana_pasada:
+        st.info("🔒 **Historical View (Read-Only Mode):** Viewing past week.")
+
     selected_mobile_day = st.radio("Select Day / Seleccionar Día", days, horizontal=True)
     st.write("---")
     
@@ -648,7 +686,6 @@ st.markdown("### 🖨️ Export & Print Options")
 
 col_exp_csv, col_exp_pdf = st.columns(2)
 
-# EXPORTACIÓN 1: CSV EXCEL
 with col_exp_csv:
     csv_rows = [["Employee ID", "Official Role", "Full Name", "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Total Weekly Hours"]]
     for emp in empleados_ordenados:
@@ -677,7 +714,6 @@ with col_exp_csv:
         use_container_width=True
     )
 
-# EXPORTACIÓN 2: PDF PRINT
 with col_exp_pdf:
     filtro_pdf_loc = st.selectbox("PDF Location Filter", ["All Facilities"] + locations, index=0)
     pdf_bytes = generar_pdf_calendario(semana_activa, empleados_ordenados, st.session_state.matriz_horario, filtro_pdf_loc)
